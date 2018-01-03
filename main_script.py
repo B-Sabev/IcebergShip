@@ -6,11 +6,13 @@ from bcolz import carray as bcolzarray
 import numpy as np
 import matplotlib.pyplot as plt
 from sklearn.model_selection import train_test_split
+import pandas as pd
 
 from keras.models import Sequential
 from keras.preprocessing.image import ImageDataGenerator
 from keras.layers import Dense, Conv2D, Dropout, MaxPooling2D,Flatten
 from keras.callbacks import ModelCheckpoint
+
 
 #%%
 
@@ -84,7 +86,22 @@ model.compile(optimizer='rmsprop',
 #%%
 """
 Image augmentation
+"""
 
+def normalize(X):
+    """
+    Normalize all images in a dataset X, where axis 1 is the image
+    """
+    return (X - X.mean(axis=1, keepdims=True))/ X.std(axis=1, keepdims=True)
+
+# First normalize, then reshape to proper format
+X_train = normalize(X_train)
+X_train = np.reshape(X_train, (-1, 75,75,2))
+X_val = normalize(X_val)
+X_val = np.reshape(X_val, (-1, 75,75,2))
+
+
+"""
 keras.preprocessing.image.ImageDataGenerator(featurewise_center=False,
     featurewise_std_normalization=False,
     rotation_range=0.,
@@ -98,38 +115,52 @@ keras.preprocessing.image.ImageDataGenerator(featurewise_center=False,
 """
 
 
-def normalize(X):
-    """
-    Normalize all images in a dataset X, where axis 1 is the image
-    """
-    return (X - X.mean(axis=1, keepdims=True))/ X.std(axis=1, keepdims=True) 
-X_train = normalize(X_train)
-X_val = normalize(X_val)
-
-# Reshape to image format
-X_train = np.reshape(X_train, (-1, 75,75,2))
-X_val = np.reshape(X_val, (-1, 75,75,2))
-
 train_datagen = ImageDataGenerator()
 val_datagen = ImageDataGenerator()
 
 train_gen = train_datagen.flow(X_train, y_train, batch_size=128)
 val_gen = val_datagen.flow(X_val, y_val, batch_size=256)    
 
-#%%     
+#%%
+"""
+Train Model
+"""     
 filepath="model/weights-{epoch:03d}-{val_acc:.3f}.hdf5"
-checkpoint = ModelCheckpoint(filepath, monitor='val_acc', verbose=2, save_best_only=True, mode='max')
-callbacks_list = [checkpoint]
+#checkpoint = ModelCheckpoint(filepath, monitor='val_acc', verbose=2, save_best_only=True, mode='max')
+#callbacks_list = [checkpoint]
 
 
 # Fit model
 model.fit_generator(train_gen,
                     steps_per_epoch = 2,
                     epochs = 5,
-                    callbacks = callbacks_list,
+     #               callbacks = callbacks_list,
                     validation_data=val_gen,
                     verbose = 2,
                     validation_steps=1,
-                    initial_epoch=2)            
-            
+                    initial_epoch=2)        
+
+
+#%%
+"""
+Predict on test data and write submission
+"""    
+# Pick a name for the submission file
+sub_name = "Submission"
+
+# Load test data
+X_test = np.array(bcolzarray(rootdir='data/processed/test/X', mode='r'))
+ids = np.array(bcolzarray(rootdir='data/processed/test/ids', mode='r'))
+angle_test = np.array(bcolzarray(rootdir='data/processed/test/a', mode='r'))
+
+# Normalize image and put it in the proper shape
+X_test = normalize(X_test)
+X_test = np.reshape(X_test, (-1, 75,75,2))
+
+predictions = model.predict(X_test, verbose=1)
+# write submission to csv
+submission = pd.DataFrame()
+submission['id']=ids
+submission['is_iceberg']=predictions.reshape(-1)
+submission.to_csv('submissions/{}.csv'.format(sub_name), index=False)            
             
