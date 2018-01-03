@@ -1,0 +1,16 @@
+ids - unique string for each datapoint
+angle - single float for the angle it which the image is captured, 133 missign values
+band_1, band_2 - two images 75x75 flattened
+label - 1 for iceberg 753/1604, 0 for ship, only for Train set
+
+From this the processed data is:
+
+train:
+a - angle as float, missing values where replaced with -1   (float)
+X - concatenated band_1 and band_2 across 3rd axis	    (float)
+y - correct label					    (int)	
+
+test:
+a - angle as float, missing values where replaced with -1   (float)
+X - concatenated band_1 and band_2 across 3rd axis	    (float)
+ids - id of each image for submission			    (str)
