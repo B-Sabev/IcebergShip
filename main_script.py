@@ -1,7 +1,9 @@
 # -*- coding: utf-8 -*-
 
 #%%
-# Imports 
+"""
+Add all nessesary imports 
+"""
 from bcolz import carray as bcolzarray
 import numpy as np
 import matplotlib.pyplot as plt
@@ -10,96 +12,45 @@ import pandas as pd
 
 from keras.models import Sequential
 from keras.preprocessing.image import ImageDataGenerator
-from keras.layers import Dense, Conv2D, Dropout, MaxPooling2D,Flatten
-from keras.callbacks import ModelCheckpoint
-
+from keras.layers import Dense, Conv2D, Dropout, MaxPooling2D,Flatten, Activation
+from keras.layers.normalization import BatchNormalization
+from keras.callbacks import ModelCheckpoint, EarlyStopping, TensorBoard, ReduceLROnPlateau
 
 #%%
-
-# Load all train data
+"""
+Load training data
+"""
 X_train = np.array(bcolzarray(rootdir='data/processed/train/X', mode='r'))
 y_train = np.array(bcolzarray(rootdir='data/processed/train/y', mode='r'))
 angle_train = np.array(bcolzarray(rootdir='data/processed/train/a', mode='r'))
-#%%
-"""
-Plot angles and random images of the 2 bands for each of the classes
-"""
 
-plt.hist(angle_train)
-plt.title("Distribution of angles")
-plt.show()
-np.random.seed(505)
-def image_class_gallery(X, y, n_imgs=5):
-    select0 = np.random.choice(np.squeeze(np.argwhere(y==0)), n_imgs)
-    select1 = np.random.choice(np.squeeze(np.argwhere(y==1)), n_imgs)
-    band_1 = np.squeeze(X[:,:,0])
-    band_2 = np.squeeze(X[:,:,1])
-    imgs = [ 
-            band_1[select0,],
-            band_2[select0,],
-            band_1[select1,],
-            band_2[select1,]
-           ]
-    f, ax = plt.subplots(n_imgs, 4, figsize=(20, 6 * n_imgs))
-    for row in range(n_imgs):
-        for im in range(4):
-            current_img = np.reshape(imgs[im][row,], (75,75))
-            ax[row][im].imshow(current_img)
-            title = "Ship" if im < 2 else "Iceberg"
-            title += " HH" if im==0 or im==2 else " HV"
-            ax[row][im].set_title(title)
-            ax[row][im].axis('off')
-            
-image_class_gallery(X_train, y_train, n_imgs=6) 
+
 
 #%%
 """
-Split into train and validation dataset
+Train and validation set
+Image Augmentation
 """
+
+# TODO - try with a third channel
+
 X_train, X_val, y_train, y_val = train_test_split(X_train, y_train, test_size=0.2, random_state=92)
 print("Fraction of positive examples in train {:.4f}".format(np.sum(y_train) / y_train.shape[0]))
 print("Fraction of positive examples in valid {:.4f}".format(np.sum(y_val) / y_val.shape[0]))
 
-#%%
-"""
-Define basic keras model
-"""
-
-model = Sequential() 
-model.add(Conv2D(32, (3, 3), activation='relu', input_shape=(75, 75, 2)))
-model.add(Conv2D(32, (3, 3), activation='relu'))
-model.add(MaxPooling2D(pool_size=(2, 2)))
-model.add(Conv2D(32, (3, 3), activation='relu'))
-model.add(Conv2D(32, (3, 3), activation='relu'))
-model.add(MaxPooling2D(pool_size=(2, 2)))
-model.add(Flatten())
-model.add(Dense(2000, activation='relu'))
-model.add(Dropout(0.5))
-model.add(Dense(500, activation='relu'))
-model.add(Dense(1, activation='sigmoid'))  
-
-
-model.compile(optimizer='rmsprop', 
-              loss='binary_crossentropy',
-              metrics=['accuracy'])
-
-#%%
-"""
-Image augmentation
-"""
-
 def normalize(X):
-    """
-    Normalize all images in a dataset X, where axis 1 is the image
-    """
-    return (X - X.mean(axis=1, keepdims=True))/ X.std(axis=1, keepdims=True)
+    # Normalize all images in a dataset X, where axis 1 is the image
+    # (X - m_X) / std_X, per filter
+    X_norm = np.zeros(shape=X.shape)
+    for i in range(X.shape[2]):
+        X_norm[:,:,i] = (X[:,:,i] - X[:,:,i].mean(axis=1, keepdims=True)) / X[:,:,i].std(axis=1, keepdims=True)
+    return X_norm
 
 # First normalize, then reshape to proper format
 X_train = normalize(X_train)
-X_train = np.reshape(X_train, (-1, 75,75,2))
+X_train = np.reshape(X_train, (-1,75,75,2))
 X_val = normalize(X_val)
-X_val = np.reshape(X_val, (-1, 75,75,2))
-
+X_val = np.reshape(X_val, (-1,75,75,2))
 
 """
 keras.preprocessing.image.ImageDataGenerator(featurewise_center=False,
@@ -114,32 +65,145 @@ keras.preprocessing.image.ImageDataGenerator(featurewise_center=False,
     rescale=None)
 """
 
+train_datagen = ImageDataGenerator(
+                                    rotation_range=0.3,
+                                    width_shift_range=0.2,
+                                    height_shift_range=0.2,
+                                    shear_range=0.2,
+                                    horizontal_flip=False,
+                                    vertical_flip=False
+                                    )
+#%%
+"""
+Define the model
 
-train_datagen = ImageDataGenerator()
-val_datagen = ImageDataGenerator()
+1 pre-build
+1 custom with angle
+"""
 
-train_gen = train_datagen.flow(X_train, y_train, batch_size=128)
-val_gen = val_datagen.flow(X_val, y_val, batch_size=256)    
+# TODO try other activations
+
+model = Sequential() 
+
+
+model.add(Conv2D(64, kernel_size=(3,3), input_shape=(75,75,2)))
+model.add(Activation('relu'))
+model.add(BatchNormalization())
+model.add(MaxPooling2D(pool_size=(3,3), strides=(2,2)))
+
+
+
+model.add(Conv2D(128, kernel_size=(3,3)))
+model.add(Activation('relu'))
+model.add(BatchNormalization())
+model.add(MaxPooling2D(pool_size=(2,2)))
+
+
+
+model.add(Conv2D(128, kernel_size=(1,1)))
+
+model.add(Conv2D(128, kernel_size=(3,3)))
+model.add(Activation('relu'))
+model.add(BatchNormalization())
+model.add(MaxPooling2D(pool_size=(2,2)))
+
+model.add(Conv2D(128, kernel_size=(1,1)))
+
+model.add(Conv2D(64, kernel_size=(3,3)))
+model.add(Activation('relu'))
+model.add(BatchNormalization())
+model.add(MaxPooling2D(pool_size=(2,2)))
+
+model.add(Flatten())
+
+
+model.add(Dense(512))
+model.add(Activation('relu'))
+model.add(Dropout(0.3))
+
+model.add(Dense(256))
+model.add(Activation('relu'))
+model.add(Dropout(0.3))
+
+
+model.add(Dense(1, activation='sigmoid'))  
+
+model.compile(optimizer='adam', 
+              loss='binary_crossentropy',
+              metrics=['accuracy'])
+
 
 #%%
 """
 Train Model
 """     
-filepath="model/weights-{epoch:03d}-{val_acc:.3f}.hdf5"
-#checkpoint = ModelCheckpoint(filepath, monitor='val_acc', verbose=2, save_best_only=True, mode='max')
-#callbacks_list = [checkpoint]
+batch_size = 16
+n_epochs = 1
+n_train_samples = X_train.shape[0]
+weights_path="model/weights/weights-{epoch:03d}-{val_acc:.3f}.hdf5"
+model_path = None
+
+if model_path:
+    model.load_weights(model_path)
+
+# Callbacks
+checkpoint = ModelCheckpoint(weights_path, monitor='val_acc', verbose=2, save_best_only=True, mode='max')
+earlyStop = EarlyStopping(monitor='val_loss', min_delta=0.001, patience=15, verbose=1)
+lr_schedule = ReduceLROnPlateau(monitor='val_loss', factor=0.1, patience=10, verbose=1,  epsilon=0.001, cooldown=3, min_lr=1e-12)
+# graph is total nonsense
+tb = TensorBoard(log_dir='./model/log/', histogram_freq=1, batch_size=batch_size, 
+                 write_graph=False, write_grads=True, write_images=False)
+callbacks_list = [checkpoint, earlyStop, tb, lr_schedule]
+
+
+train_gen = train_datagen.flow(X_train, y_train, batch_size=batch_size)
 
 
 # Fit model
 model.fit_generator(train_gen,
-                    steps_per_epoch = 2,
-                    epochs = 5,
-     #               callbacks = callbacks_list,
-                    validation_data=val_gen,
+                    steps_per_epoch = n_train_samples // batch_size - 8,
+                    epochs = n_epochs,
+                    callbacks = callbacks_list,
+                    validation_data=(X_val, y_val),
                     verbose = 2,
                     validation_steps=1,
-                    initial_epoch=2)        
+                    initial_epoch=0) 
 
+
+
+"""
+Only after happy with the validation accuracy continue forward
+"""
+
+#%%
+
+"""
+PseudoLabeling   - try with and without  
+"""
+
+
+"""
+Fit the validation data before the final test - train + 5*validation data for 3 epochs
+"""
+# Stack Train and 5 times validation data
+X_train_on_val = np.vstack([X_train, X_val, X_val, X_val, X_val, X_val])
+y_train_on_val = np.hstack([y_train, y_val, y_val, y_val, y_val, y_val])
+
+def shuffle_2_arrays(X,y):
+    p = np.random.permutation(X.shape[0])
+    X_shuffled = X[p,:,:,:]
+    y_shuffled = y[p]
+    return (X_shuffled, y_shuffled)
+
+X_train_on_val, y_train_on_val = shuffle_2_arrays(X_train_on_val,y_train_on_val)
+
+train_gen = train_datagen.flow(X_train_on_val, y_train_on_val, batch_size=128)
+
+model.fit_generator(train_gen,
+                    steps_per_epoch = 25,
+                    epochs = 3,
+                    callbacks = callbacks_list,
+                    verbose = 2) 
 
 #%%
 """
@@ -155,7 +219,7 @@ angle_test = np.array(bcolzarray(rootdir='data/processed/test/a', mode='r'))
 
 # Normalize image and put it in the proper shape
 X_test = normalize(X_test)
-X_test = np.reshape(X_test, (-1, 75,75,2))
+X_test = np.reshape(X_test, (-1,75,75,2))
 
 predictions = model.predict(X_test, verbose=1)
 # write submission to csv
