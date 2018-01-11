@@ -8,9 +8,11 @@ From this the processed data is:
 train:
 a - angle as float, missing values where replaced with -1   (float)
 X - concatenated band_1 and band_2 across 3rd axis	    (float)
-y - correct label					    (int)	
+y - correct label					    (int)
+ids - id of each image for submission			    (str)	
 
 test:
 a - angle as float, missing values where replaced with -1   (float)
 X - concatenated band_1 and band_2 across 3rd axis	    (float)
 ids - id of each image for submission			    (str)
+is_natural - if the image is natural or machine generated   (int)

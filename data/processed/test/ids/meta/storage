@@ -1,1 +1,1 @@
-{"dtype": "<U8", "cparams": {"clevel": 5, "shuffle": 1, "cname": "lz4", "quantize": 0}, "chunklen": 8192, "expectedlen": 8424, "dflt": ""}
+{"dflt": "", "chunklen": 8192, "expectedlen": 8424, "cparams": {"cname": "lz4", "shuffle": 1, "quantize": 0, "clevel": 5}, "dtype": "<U8"}

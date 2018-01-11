@@ -1,2 +1,4 @@
-Data consists of 3 files train and test in json format.
-Both files are too big for github and too big to be subitted in blackboard.
+train.json
+test.json
+
+rars need to be extracted to get these files before running the code, contains raw data as it is provided by Kaggle
