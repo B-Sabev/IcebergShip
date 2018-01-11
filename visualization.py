@@ -1,12 +1,37 @@
 # -*- coding: utf-8 -*-
 
 #%%
+from bcolz import carray as bcolzarray
+import numpy as np
+import matplotlib.pyplot as plt
+from sklearn.model_selection import train_test_split
+import pandas as pd
+
+#%%
 """
 Load training data
 """
 X_train = np.array(bcolzarray(rootdir='data/processed/train/X', mode='r'))
 y_train = np.array(bcolzarray(rootdir='data/processed/train/y', mode='r'))
 angle_train = np.array(bcolzarray(rootdir='data/processed/train/a', mode='r'))
+
+
+#%%
+# Load test data
+X_test = np.array(bcolzarray(rootdir='data/processed/test/X', mode='r'))
+ids = np.array(bcolzarray(rootdir='data/processed/test/ids', mode='r'))
+angle_test = np.array(bcolzarray(rootdir='data/processed/test/a', mode='r'))
+
+
+#%%
+ang = np.array([len(str(a)) for a in angle_test])
+
+"""
+investigate the machine generated images from the raw data
+
+"""
+
+
 #%%
 
 #TODO consider adding multiplication
