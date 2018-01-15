@@ -8,28 +8,37 @@ from sklearn.model_selection import train_test_split
 import pandas as pd
 
 #%%
-"""
-Load training data
-"""
+
+#Load training data
 X_train = np.array(bcolzarray(rootdir='data/processed/train/X', mode='r'))
 y_train = np.array(bcolzarray(rootdir='data/processed/train/y', mode='r'))
-angle_train = np.array(bcolzarray(rootdir='data/processed/train/a', mode='r'))
+angle_train = np.array(bcolzarray(rootdir='data/processed/train/angle', mode='r'))
 
-
-#%%
 # Load test data
 X_test = np.array(bcolzarray(rootdir='data/processed/test/X', mode='r'))
 ids = np.array(bcolzarray(rootdir='data/processed/test/ids', mode='r'))
-angle_test = np.array(bcolzarray(rootdir='data/processed/test/a', mode='r'))
+angle_test = np.array(bcolzarray(rootdir='data/processed/test/angle', mode='r'))
+is_natural = np.array(bcolzarray(rootdir='data/processed/test/is_natural', mode='r'))
+
+#%%
+plt.hist([angle_train, angle_test], 100, stacked=True, label=['train', 'test'])
+plt.legend()
+plt.title("Incident angle distribution for train and test data")
+plt.xlabel("degree of angle")
+plt.show()
 
 
 #%%
-ang = np.array([len(str(a)) for a in angle_test])
 
 """
-investigate the machine generated images from the raw data
+Classlabel X Bands
+
+Different bands 
+
+Natural vs Machine-generated
 
 """
+
 
 
 #%%
@@ -51,7 +60,7 @@ def plot_multi(X):
         ax[i][2].imshow(X[i,:,:,1] * X[i,:,:,0])
         ax[i][2].axis('off')
         
-        ax[i][3].imshow(X[i,:,:,0] / X[i,:,:,1])
+        ax[i][3].imshow(X[i,:,:,0] - X[i,:,:,1])
         ax[i][3].axis('off')
         
         ax[i][4].imshow(X[i,:,:,1] + X[i,:,:,0])
@@ -98,11 +107,8 @@ plot_multi(X_train_norm)
 """
 Plot angles and random images of the 2 bands for each of the classes
 """
-
-plt.hist(angle_train)
-plt.title("Distribution of angles")
-plt.show()
 np.random.seed(505)
+
 def image_class_gallery(X, y, n_imgs=5):
     select0 = np.random.choice(np.squeeze(np.argwhere(y==0)), n_imgs)
     select1 = np.random.choice(np.squeeze(np.argwhere(y==1)), n_imgs)
@@ -124,4 +130,4 @@ def image_class_gallery(X, y, n_imgs=5):
             ax[row][im].set_title(title)
             ax[row][im].axis('off')
             
-image_class_gallery(X_train, y_train, n_imgs=6) 
+image_class_gallery(X_train_norm, y_train, n_imgs=6) 
