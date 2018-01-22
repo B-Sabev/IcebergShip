@@ -12,9 +12,12 @@ import pandas as pd
 
 from keras.models import Sequential, Model
 from keras.preprocessing.image import ImageDataGenerator
-from keras.layers import Dense, Conv2D, Dropout, MaxPooling2D,Flatten, Activation
+from keras.layers import Dense, Conv2D, Dropout, MaxPooling2D,Flatten, Activation, Input,  Concatenate, AveragePooling2D
 from keras.layers.normalization import BatchNormalization
 from keras.callbacks import ModelCheckpoint, EarlyStopping, TensorBoard, ReduceLROnPlateau
+from keras.optimizers import Adam
+
+
 
 #%%
 """
@@ -31,7 +34,6 @@ angle_train = np.array(bcolzarray(rootdir='data/processed/train/angle', mode='r'
 
 
 X_train = X_train.reshape(-1, 75, 75, 2)
-X_train.astype(np.float32)
 X_train, X_val, y_train, y_val = train_test_split(X_train, y_train, test_size=0.2, random_state=92)
 print("Fraction of positive examples in train {:.4f}".format(np.sum(y_train) / y_train.shape[0]))
 print("Fraction of positive examples in valid {:.4f}".format(np.sum(y_val) / y_val.shape[0]))
@@ -41,8 +43,8 @@ def normalize(X):
     # (X - m_X) / std_X, per filter
     X_norm = np.zeros(shape=X.shape)
     for i in range(X.shape[3]):
-        X_norm[:,:,:,i] = (X[:,:,:,i] - X[:,:,:,i].mean(axis=1, keepdims=True)) / X[:,:,:,i].std(axis=1, keepdims=True)
-    return X_norm
+        X_norm[:,:,:,i] = (X[:,:,:,i] - X[:,:,:,i].mean(keepdims=True)) / X[:,:,:,i].std(keepdims=True)
+    return X_norm.astype(np.float32)
 
 # Normalization 0 mean, 1 std
 X_train = normalize(X_train)
@@ -65,77 +67,138 @@ train_datagen = ImageDataGenerator(
 
 
 #%%
-def getModel():
-    #Build keras model
+
+"""
+Define the densenet class
+"""
+class DenseNet(object):
     
-    model=Sequential()
+    def __init__(self, input_size, L_block, k, compression, fc_units, fc_drop):
+        self.input = None
+        self.output = None
+        self.L_block = L_block
+        self.k = k
+        self.compression = compression
+        self.fc_units = fc_units
+        self.fc_drop = fc_drop
+        self.input_size = input_size
+
     
-    # CNN 1
-    model.add(Conv2D(64, kernel_size=(3, 3),activation='relu', input_shape=(75, 75, 2)))
-    model.add(MaxPooling2D(pool_size=(3, 3), strides=(2, 2)))
-    model.add(Dropout(0.2))
-
-    # CNN 2
-    model.add(Conv2D(128, kernel_size=(3, 3), activation='relu' ))
-    model.add(MaxPooling2D(pool_size=(2, 2), strides=(2, 2)))
-    model.add(Dropout(0.2))
-
-    # CNN 3
-    model.add(Conv2D(128, kernel_size=(3, 3), activation='relu'))
-    model.add(MaxPooling2D(pool_size=(2, 2), strides=(2, 2)))
-    model.add(Dropout(0.3))
-
-    #CNN 4
-    model.add(Conv2D(64, kernel_size=(3, 3), activation='relu'))
-    model.add(MaxPooling2D(pool_size=(2, 2), strides=(2, 2)))
-    model.add(Dropout(0.3))
-
-    # You must flatten the data for the dense layers
-    model.add(Flatten())
-
-    #Dense 1
-    model.add(Dense(512, activation='relu'))
-    model.add(Dropout(0.2))
-
-    #Dense 2
-    model.add(Dense(256, activation='relu'))
-    model.add(Dropout(0.2))
-
-    # Output 
-    model.add(Dense(1, activation="sigmoid"))
-
-    model.compile(loss='binary_crossentropy', optimizer='adam', metrics=['accuracy'])
+    def getModel(self):
+        return Model(inputs=self.input, outputs=self.output)
     
-    return model
+    def forward(self):
+        self.input = Input(self.input_size)
+        
+        # Start of the network in a large convolution followed by maxpool
+        x = Conv2D(2 * self.k, kernel_size=(5,5), padding='same')(self.input)
+        x = MaxPooling2D(pool_size=(3,3), strides=(2,2))(x)
+        
+        # Stack denseBlocks followed by transition layer
+        for L in self.L_block[:-1]:
+            x = self.denseBlock(x, self.k, L)
+            x = self.transitionLayer(x, self.k, self.compression) 
+        x = self.denseBlock(x, self.k, self.L_block[-1])
+        x = AveragePooling2D(pool_size=(2,2), strides=(2,2))(x)
+        x = Activation('relu')(x)
+        # Top layer
+        x = Flatten()(x)
+        for units in self.fc_units:
+            x = Dense(units, activation='relu')(x)
+            if self.fc_drop is not None:
+                x = Dropout(self.fc_drop)(x)
+        
+    
+        # Define the model
+        self.output = Dense(1, activation='sigmoid')(x)
+    
+    def denseBlock(self, input_layer, n_filters, n_layers):
+        """
+        Dense block - connect every layer to every other layer in the block
+        First convolve the input, then convolve again, then concat the input and keep convolving
+        """
+        nodes = []
+        x = self.bottleneck(input_layer, n_filters)
+        nodes.append(x)
+        for i in range(n_layers-1):
+            if i == 0:
+                x = nodes[0]
+            else:
+                x = Concatenate(axis=-1)(nodes) 
+            x = self.bottleneck(x, n_filters)
+            nodes.append(x)
+        return x
+    
+    def bottleneck(self, input_layer, n_filters):
+         #BN-ReLU-Conv(1×1)-BN-ReLU-Conv(3×3)
+         x = BatchNormalization()(input_layer)
+         x = Activation('relu')(x)
+         x = Conv2D(4*n_filters, kernel_size=(1, 1), padding='same')(x)
+         x = BatchNormalization()(x)
+         x = Activation('relu')(x)
+         x = Conv2D(n_filters, kernel_size=(3, 3), padding='same')(x)
+         return x
+        
+    def transitionLayer(self, x, n_filters, compression):
+        """
+        Bottleneck the features discovered by DenseBlock with compression param,
+        AveragePool over the output
+        """
+        filters = int(n_filters*compression)
+        x = Conv2D(filters, kernel_size=(1, 1), padding='same', activation='relu')(x)
+        x = AveragePooling2D(pool_size=(2,2), strides=(2,2))(x)
+        return x
 
-model = getModel()
+
+net = DenseNet(input_size=(75,75,2), 
+               L_block = [12,12,12], 
+               k=24, 
+               compression=0.5, 
+               fc_units=[1024, 1], 
+               fc_drop=0.5)
+
+net.forward()
+model = net.getModel()
 model.summary()
 
+#%%
+
+loss = 'binary_crossentropy'        
+optimizer = Adam(lr=1e-4, beta_1=0.9, beta_2=0.999)
+metrics = ['accuracy']
+    
+
+
+#net = DenseNet(input_size=(75,75,2), L_block = [6,6,6,10], k=12, compression=0.5, fc_units=[1024, 1], fc_drop=0.5)
+#net.forward()
+model.compile(loss=loss,
+                  optimizer=optimizer,
+                  metrics=metrics)
 
 
 #%%
 """
 Train Model
 """     
-batch_size = 256
-n_epochs = 50
+batch_size = 32
+n_epochs = 20
 steps_per_epoch = X_train.shape[0] // batch_size
 weights_path="model/weights/weights-{epoch:03d}-{val_acc:.3f}.hdf5" # format to save
 
 # Write the name of the model you want to load
-model_path = "model/weights/weights-044-0.869.hdf5"                 
+model_path = None              
 
 if model_path:
-    model.load_weights(model_path)
+    #model.load_weights(model_path)
     print("Model Loaded")
 
 def getCallbacks():
     # Callbacks
     checkpoint = ModelCheckpoint(weights_path, monitor='val_acc', verbose=2, save_best_only=True, mode='max')
     earlyStop = EarlyStopping(monitor='val_loss', min_delta=0.001, patience=10, verbose=1)
-    lr_schedule = ReduceLROnPlateau(monitor='val_loss', factor=0.1, patience=4, verbose=1,  epsilon=0.001, cooldown=2, min_lr=1e-12)
-    tb = TensorBoard(log_dir='./model/log/', histogram_freq=1, batch_size=batch_size, write_graph=False, write_grads=True, write_images=False)
-    return [checkpoint, earlyStop, tb, lr_schedule]
+    lr_schedule = ReduceLROnPlateau(monitor='val_loss', factor=0.1, patience=4, verbose=1,  epsilon=0.001, cooldown=1, min_lr=1e-12)
+    #tb = TensorBoard(log_dir='./model/log/', histogram_freq=1, batch_size=batch_size, write_graph=False, write_grads=True, write_images=False)
+    return [checkpoint,earlyStop,lr_schedule]
 callbacks_list = getCallbacks()
 print("Callbacks ready")
 # Train data 
@@ -150,7 +213,7 @@ model.fit_generator(train_gen,
                     callbacks = callbacks_list,
                     validation_data=(X_val, y_val),
                     verbose = 2,
-                    initial_epoch=26) 
+                    initial_epoch=0) 
 
 print("Done training")
 
