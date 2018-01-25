@@ -89,6 +89,48 @@ net.forward()
 net.model.summary()
 
 
+#%%
 
+    earlyStop = EarlyStopping(monitor='val_loss', min_delta=0.001, patience=10, verbose=1)
+    lr_schedule = ReduceLROnPlateau(monitor='val_loss', factor=0.1, patience=4, verbose=1,  epsilon=0.001, cooldown=1, min_lr=1e-12)
+    #tb = TensorBoard(log_dir='./model/log/', histogram_freq=1, batch_size=batch_size, write_graph=False, write_grads=True, write_images=False)
+    return [checkpoint,earlyStop,lr_schedule]
+
+
+#%%
+"""
+Train on small batches
+"""
+batch_size = 64
+n_epochs = 100
+steps_per_epoch = 1#X_train.shape[0] // batch_size
+weights_path="model/weights/short_epochs/weights-{epoch:03d}-{val_acc:.3f}.hdf5" # format to save
+
+# Write the name of the model you want to load
+model_path = None              
+
+if model_path:
+    #model.load_weights(model_path)
+    print("Model Loaded")
+
+checkpoint = ModelCheckpoint(weights_path, monitor='val_acc', verbose=2, save_best_only=False, mode='max')
+callbacks_list = [checkpoint]
+
+train_gen = train_datagen.flow(X_train, y_train, batch_size=batch_size)
+val_gen = val_datagen.flow(X_val, y_val, batch_size=8) # validate only on 128 examples 
+
+
+# Fit 1 batch for enough epochs to iterate over all data
+model.fit_generator(train_gen,
+                    steps_per_epoch = 1,
+                    epochs = X_train.shape[0] // batch_size,
+                    verbose = 2) 
+# 
+model.fit_generator(train_gen,
+                    steps_per_epoch = 0,
+                    epochs = 1,
+                    callbacks = callbacks_list,
+                    validation_data=val_gen,
+                    verbose = 2)
 
 

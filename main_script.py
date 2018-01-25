@@ -73,17 +73,17 @@ Define the densenet class
 """
 class DenseNet(object):
     
-    def __init__(self, input_size, L_block, k, compression, fc_units, fc_drop):
+    def __init__(self, input_size, L, k, compression, use_bottleneck, fc_units=[], fc_drop=None):
         self.input = None
         self.output = None
-        self.L_block = L_block
+        self.L = L
         self.k = k
+        self.use_bottleneck = use_bottleneck
         self.compression = compression
         self.fc_units = fc_units
         self.fc_drop = fc_drop
         self.input_size = input_size
 
-    
     def getModel(self):
         return Model(inputs=self.input, outputs=self.output)
     
@@ -94,22 +94,29 @@ class DenseNet(object):
         x = Conv2D(2 * self.k, kernel_size=(5,5), padding='same')(self.input)
         x = MaxPooling2D(pool_size=(3,3), strides=(2,2))(x)
         
+        # 4 - Conv2d at the start, 1 dense at the end, 2 transitional
+        # Divided by 3 because we have 3 dense blocks with 1 conv2d per layer
+        #         or 6 because 3 dense blocks with 2 conv2d layers when use_bottleneck
+        if self.use_bottleneck:
+            n_layers = (self.L - 4) // 6
+        else:
+            n_layers = (self.L - 4) // 3
+        
         # Stack denseBlocks followed by transition layer
-        for L in self.L_block[:-1]:
-            x = self.denseBlock(x, self.k, L)
+        for i in range(2):
+            x = self.denseBlock(x, self.k, n_layers)
             x = self.transitionLayer(x, self.k, self.compression) 
-        x = self.denseBlock(x, self.k, self.L_block[-1])
-        x = AveragePooling2D(pool_size=(2,2), strides=(2,2))(x)
+        x = self.denseBlock(x, self.k, n_layers)
+        x = AveragePooling2D(pool_size=(2,2))(x)
         x = Activation('relu')(x)
-        # Top layer
+        # Top layer, add FC if set
         x = Flatten()(x)
         for units in self.fc_units:
             x = Dense(units, activation='relu')(x)
             if self.fc_drop is not None:
                 x = Dropout(self.fc_drop)(x)
         
-    
-        # Define the model
+        # Output
         self.output = Dense(1, activation='sigmoid')(x)
     
     def denseBlock(self, input_layer, n_filters, n_layers):
@@ -118,22 +125,35 @@ class DenseNet(object):
         First convolve the input, then convolve again, then concat the input and keep convolving
         """
         nodes = []
-        x = self.bottleneck(input_layer, n_filters)
+        if self.use_bottleneck:
+            x = self.bottleneck(input_layer, n_filters)
+        else:
+            x = self.plainLayer(input_layer, n_filters)
         nodes.append(x)
         for i in range(n_layers-1):
             if i == 0:
                 x = nodes[0]
             else:
                 x = Concatenate(axis=-1)(nodes) 
-            x = self.bottleneck(x, n_filters)
+            # use bottleneck layer or not   
+            if self.use_bottleneck:
+                x = self.bottleneck(x, n_filters)
+            else:
+                x = self.plainLayer(x, n_filters)
             nodes.append(x)
         return x
     
+    def plainLayer(self, input_layer, n_filters):
+        x = BatchNormalization()(input_layer)
+        x = Activation('relu')(x)
+        x = Conv2D(n_filters, kernel_size=(3, 3), padding='same')(x)
+        return x
+        
     def bottleneck(self, input_layer, n_filters):
          #BN-ReLU-Conv(1×1)-BN-ReLU-Conv(3×3)
          x = BatchNormalization()(input_layer)
          x = Activation('relu')(x)
-         x = Conv2D(4*n_filters, kernel_size=(1, 1), padding='same')(x)
+         x = Conv2D(4*n_filters, kernel_size=(1, 1))(x)
          x = BatchNormalization()(x)
          x = Activation('relu')(x)
          x = Conv2D(n_filters, kernel_size=(3, 3), padding='same')(x)
@@ -145,32 +165,91 @@ class DenseNet(object):
         AveragePool over the output
         """
         filters = int(n_filters*compression)
-        x = Conv2D(filters, kernel_size=(1, 1), padding='same', activation='relu')(x)
+        x = Conv2D(filters, kernel_size=(1, 1), activation='relu')(x)
         x = AveragePooling2D(pool_size=(2,2), strides=(2,2))(x)
         return x
+    
+#%%
 
+"""
+Try dropout in final layer
+"""   
+
+"""
+DenseNet_L40_k12 = DenseNet(input_size=(75,75,2), 
+                            L=40, 
+                            k=12, 
+                            compression=1, 
+                            use_bottleneck=False)
+
+DenseNet-BC_L40_k12 = DenseNet(input_size=(75,75,2), 
+                                L=40, 
+                                k=12, 
+                                compression=0.5, 
+                                use_bottleneck=True)
+"""
+
+
+Ls = [6*n_layers + 4 for n_layers in range(3,6)]
+ks = [8,12,16]
+
+DenseNets = {}
+
+# Compile options
+loss = 'binary_crossentropy'        
+optimizer = Adam(lr=1e-3, beta_1=0.9, beta_2=0.999)
+metrics = ['accuracy']
+
+for L in Ls:
+    for k in ks:
+        name = "L={}_k={}".format(L,k)
+        temp_net = DenseNet(input_size=(75,75,2), 
+                                L=L, 
+                                k=k, 
+                                compression=0.5, 
+                                use_bottleneck=True) 
+        temp_net.forward()
+        DenseNets[name] = temp_net.getModel()
+        DenseNets[name].compile(loss=loss,
+                                  optimizer=optimizer,
+                                  metrics=metrics)
+
+
+#%%
+"""
+DenseNet L=40,k=12 - heavy overfitting, 410s/epoch
+DenseNet-BC L=40,k=12 - heavy overfitting 250s/epoch
+##################################
+
+
+DenseNet-BC L=22,k=8 - diecent ~80-85, 1e-5
+    DenseNet-BC L=22,k=12 - half diecent ~80-85, overfitted at the end
+    DenseNet-BC L=22,k=16 - less half diecent ~70-75, overfitted at the end
+
+    DenseNet-BC L=28,k=8 - terrible, way too much overfitting
+DenseNet-BC L=28,k=12 - diecent ~80-87.5
+    DenseNet-BC L=28,k=16 - terrible, way too much overfitting
+
+    DenseNet-BC L=34,k=8 - half diecent ~80
+DenseNet-BC L=34,k=12 - diecent ~80-85
+DenseNet-BC L=34,k=16 - diecent ~80-85
+"""
 
 net = DenseNet(input_size=(75,75,2), 
-               L_block = [12,12,12], 
-               k=24, 
+               L=13, 
+               k=12, 
                compression=0.5, 
-               fc_units=[1024, 1], 
-               fc_drop=0.5)
+               use_bottleneck=True)
 
 net.forward()
 model = net.getModel()
 model.summary()
 
-#%%
-
+# Compile options
 loss = 'binary_crossentropy'        
-optimizer = Adam(lr=1e-4, beta_1=0.9, beta_2=0.999)
+optimizer = Adam(lr=1e-3, beta_1=0.9, beta_2=0.999)
 metrics = ['accuracy']
     
-
-
-#net = DenseNet(input_size=(75,75,2), L_block = [6,6,6,10], k=12, compression=0.5, fc_units=[1024, 1], fc_drop=0.5)
-#net.forward()
 model.compile(loss=loss,
                   optimizer=optimizer,
                   metrics=metrics)
@@ -180,42 +259,103 @@ model.compile(loss=loss,
 """
 Train Model
 """     
-batch_size = 32
-n_epochs = 20
+
+
+for name, model in DenseNets.items():
+    print(name)
+    print(model)
+#%%
+
+model = DenseNets['L=28_k=12']
+name = 'L=28_k=12'
+
+batch_size = 64
+n_epochs = 100
 steps_per_epoch = X_train.shape[0] // batch_size
-weights_path="model/weights/weights-{epoch:03d}-{val_acc:.3f}.hdf5" # format to save
-
+weights_path="model/weights/DenseNet_"+name+"-{epoch:03d}-{val_acc:.3f}.hdf5" # format to save
+    
 # Write the name of the model you want to load
-model_path = None              
-
+model_path = "model/weights/DenseNet_L=28_k=12-028-0.875.hdf5"             
 if model_path:
-    #model.load_weights(model_path)
+    model.load_weights(model_path)
     print("Model Loaded")
-
-def getCallbacks():
-    # Callbacks
-    checkpoint = ModelCheckpoint(weights_path, monitor='val_acc', verbose=2, save_best_only=True, mode='max')
-    earlyStop = EarlyStopping(monitor='val_loss', min_delta=0.001, patience=10, verbose=1)
-    lr_schedule = ReduceLROnPlateau(monitor='val_loss', factor=0.1, patience=4, verbose=1,  epsilon=0.001, cooldown=1, min_lr=1e-12)
-    #tb = TensorBoard(log_dir='./model/log/', histogram_freq=1, batch_size=batch_size, write_graph=False, write_grads=True, write_images=False)
-    return [checkpoint,earlyStop,lr_schedule]
-callbacks_list = getCallbacks()
+    
+lr_schedule = ReduceLROnPlateau(monitor='val_loss', factor=0.1, patience=4, verbose=1,  epsilon=0.001, cooldown=1, min_lr=1e-12)    
+checkpoint = ModelCheckpoint(weights_path, monitor='val_acc', verbose=2, save_best_only=False, mode='max')
+earlyStop = EarlyStopping(monitor='val_loss', min_delta=0.001, patience=8, verbose=1)
+callbacks_list = [checkpoint, earlyStop, lr_schedule]
 print("Callbacks ready")
 # Train data 
 train_gen = train_datagen.flow(X_train, y_train, batch_size=batch_size)
-
-
-print("Fitting model")
+    
+print("Fitting model - DenseNetBC {}".format(name))
 # Fit model
-model.fit_generator(train_gen,
-                    steps_per_epoch = steps_per_epoch,
-                    epochs = n_epochs,
-                    callbacks = callbacks_list,
-                    validation_data=(X_val, y_val),
-                    verbose = 2,
-                    initial_epoch=0) 
+history = model.fit_generator(train_gen,
+                        steps_per_epoch = steps_per_epoch,
+                        epochs = n_epochs,
+                        callbacks = callbacks_list,
+                        validation_data=(X_val, y_val),
+                        shuffle=True,
+                        verbose = 2,
+                        initial_epoch=28) 
+    
+# Plot train and validation accuracy
+plt.plot(history.history['acc'], color='blue', label='Train accuracy')
+plt.plot(history.history['val_acc'], color='red', label='Validation accuracy')
+plt.xlabel("Epochs")
+plt.title("Train and validation accuracy during training for {}".format(name))
+plt.legend()
+plt.ylim([-0.01, 1.01])
+plt.show()
+    
+print("Done training")    
+    
+#%%
+    
+for name, model in DenseNets.items():
+    
+    
+    batch_size = 64
+    n_epochs = 40
+    steps_per_epoch = X_train.shape[0] // batch_size
+    weights_path="model/weights/DenseNet_"+name+"-{epoch:03d}-{val_acc:.3f}.hdf5" # format to save
+    
+    # Write the name of the model you want to load
+    model_path = None              
+    if model_path:
+        model.load_weights(model_path)
+        print("Model Loaded")
+    
+    
+    checkpoint = ModelCheckpoint(weights_path, monitor='val_acc', verbose=2, save_best_only=False, mode='max')
+    earlyStop = EarlyStopping(monitor='val_loss', min_delta=0.001, patience=8, verbose=1)
+    callbacks_list = [checkpoint, earlyStop]
+    print("Callbacks ready")
+    # Train data 
+    train_gen = train_datagen.flow(X_train, y_train, batch_size=batch_size)
+    
+    print("Fitting model - DenseNetBC {}".format(name))
+    # Fit model
+    history = model.fit_generator(train_gen,
+                        steps_per_epoch = steps_per_epoch,
+                        epochs = n_epochs,
+                        callbacks = callbacks_list,
+                        validation_data=(X_val, y_val),
+                        shuffle=True,
+                        verbose = 2,
+                        initial_epoch=0) 
+    
+    # Plot train and validation accuracy
+    plt.plot(history.history['acc'], color='blue', label='Train accuracy')
+    plt.plot(history.history['val_acc'], color='red', label='Validation accuracy')
+    plt.xlabel("Epochs")
+    plt.title("Train and validation accuracy during training for {}".format(name))
+    plt.legend()
+    plt.ylim([-0.01, 1.01])
+    plt.show()
+    
+    print("Done training")
 
-print("Done training")
 
 """
 Only after happy with the validation accuracy continue forward
