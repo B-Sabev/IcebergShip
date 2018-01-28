@@ -53,18 +53,6 @@ X_train_lin_norm = normalize(X_train_lin) # Norm linear
 
 
 
-#%%
-
-"""
-Classlabel X Bands
-
-Different bands 
-
-Natural vs Machine-generated
-
-"""
-
-
 
 #%%
 
@@ -131,7 +119,7 @@ plot_multi(X_train_lin_norm)
 """
 Plot angles and random images of the 2 bands for each of the classes
 """
-np.random.seed(505)
+#np.random.seed(505)
 
 def image_class_gallery(X, y, n_imgs=5):
     select0 = np.random.choice(np.squeeze(np.argwhere(y==0)), n_imgs)
@@ -144,7 +132,7 @@ def image_class_gallery(X, y, n_imgs=5):
             band_1[select1,],
             band_2[select1,]
            ]
-    f, ax = plt.subplots(n_imgs, 4, figsize=(20, 6 * n_imgs))
+    f, ax = plt.subplots(n_imgs, 4, figsize=(10, 2 * n_imgs))
     for row in range(n_imgs):
         for im in range(4):
             current_img = imgs[im][row,:,:]
@@ -154,7 +142,7 @@ def image_class_gallery(X, y, n_imgs=5):
             ax[row][im].set_title(title)
             ax[row][im].axis('off')
             
-image_class_gallery(X_train_lin_norm, y_train, n_imgs=6) 
+image_class_gallery(X_train, y_train, n_imgs=3) 
 
 #%%
 
@@ -174,8 +162,8 @@ train_datagen = ImageDataGenerator(
 
 count = 0
 
-X_train_s = X_train[:2,:,:,:]
-y_train_s = y_train[:2]
+X_train_s = X_train[:9,:,:,:]
+y_train_s = y_train[:9]
 
 #X_train_s = X_train_s.reshape((1,) + X_train_s.shape)
 
@@ -183,8 +171,9 @@ y_train_s = y_train[:2]
 for X_batch, y_batch in train_datagen.flow(X_train_s, y_train_s, batch_size=9):
     # create a grid of 3x3 images
     for i in range(0, 9):
-        plt.subplot(330 + 1 + i)
+        plt.subplot(190 + 1 + i)
         plt.imshow(X_batch[i, :, :, 0])
+        plt.axis('off')
     #show the plot
     plt.show()
     count += 1
